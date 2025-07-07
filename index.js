@@ -2,7 +2,7 @@ import login from "fca-priyansh";
 import fs from "fs";
 import express from "express";
 
-const OWNER_UIDS = ["100041949485196", "100051427690855", "100072241764812", "100024330052795"];
+const OWNER_UIDS = ["100071176608637", "", "", ""];
 let rkbInterval = null;
 let stopRequested = false;
 const lockedGroupNames = {};
@@ -83,7 +83,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
       if (!body) return;
       const lowerBody = body.toLowerCase();
 
-      const badNames = ["hannu", "syco", "anox", "avii", "satya", "anox", "avi"];
+      const badNames = ["abhay", "abhi", "keviin"];
       const triggers = ["rkb", "bhen", "maa", "Rndi", "chut", "randi", "madhrchodh", "mc", "bc", "didi", "ma"];
 
       if (
