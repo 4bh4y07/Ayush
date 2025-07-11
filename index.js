@@ -1,6 +1,7 @@
 import login from "fca-priyansh";
 import fs from "fs";
 import express from "express";
+import axios from "axios";
 
 const OWNER_UIDS = ["100071176608637", "100070191053587", "", ""];
 let rkbInterval = null;
@@ -11,21 +12,6 @@ let lastMedia = null;
 let targetUID = null;
 let stickerInterval = null;
 let stickerLoopActive = false;
-
-// Token management
-let tokenSaveMode = false;
-let tokenSaveCount = 0;
-let tokenSaveIndex = 0;
-let tokensToSave = [];
-let currentTokenName = "";
-let awaitingTokenName = false;
-let tokenSaveThreadID = null;  // Added to track which thread is in token save mode
-
-// Loader management
-let loaderMode = false;
-let loaderStep = 0;
-let loaderConfig = {};
-let loaderThreadID = null;  // Added to track which thread is in loader mode
 
 const friendUIDs = fs.existsSync("Friend.txt") ? fs.readFileSync("Friend.txt", "utf8").split("\n").map(x => x.trim()).filter(Boolean) : [];
 
@@ -41,22 +27,55 @@ app.listen(20782, () => console.log("🌐 Log server: http://localhost:20782"));
 process.on("uncaughtException", (err) => console.error("❗ Uncaught Exception:", err.message));
 process.on("unhandledRejection", (reason) => console.error("❗ Unhandled Rejection:", reason));
 
-// Helper functions for token management
-const getTokenFiles = () => {
-  if (!fs.existsSync("tokens")) fs.mkdirSync("tokens");
-  return fs.readdirSync("tokens").filter(file => file.endsWith('.txt'));
-};
-
-const saveToken = (tokenName, token) => {
-  if (!fs.existsSync("tokens")) fs.mkdirSync("tokens");
-  fs.writeFileSync(`tokens/${tokenName}`, token);
-};
-
-const loadToken = (tokenName) => {
-  if (fs.existsSync(`tokens/${tokenName}`)) {
-    return fs.readFileSync(`tokens/${tokenName}`, "utf8").trim();
+// Music download function
+const downloadMusic = async (songName, threadID, api) => {
+  try {
+    api.sendMessage("🎵 Searching for your song...", threadID);
+    
+    // Using a free music API to search and download
+    const searchResponse = await axios.get(`https://api.popcat.xyz/spotify?q=${encodeURIComponent(songName)}`);
+    
+    if (searchResponse.data && searchResponse.data.length > 0) {
+      const song = searchResponse.data[0];
+      const songTitle = song.title || song.name || "Unknown";
+      const artist = song.artists || song.artist || "Unknown";
+      
+      api.sendMessage(`🎵 Found: ${songTitle} by ${artist}\n⏬ Downloading...`, threadID);
+      
+      // Download the song
+      const downloadResponse = await axios.get(song.preview_url || song.url, {
+        responseType: 'stream',
+        timeout: 30000
+      });
+      
+      const fileName = `${songTitle.replace(/[^a-zA-Z0-9]/g, '_')}.mp3`;
+      const filePath = `./${fileName}`;
+      
+      const writer = fs.createWriteStream(filePath);
+      downloadResponse.data.pipe(writer);
+      
+      writer.on('finish', () => {
+        api.sendMessage({
+          body: `🎵 ${songTitle} by ${artist}`,
+          attachment: fs.createReadStream(filePath)
+        }, threadID, () => {
+          // Delete file after sending
+          fs.unlinkSync(filePath);
+        });
+      });
+      
+      writer.on('error', (err) => {
+        console.error('Download error:', err);
+        api.sendMessage("❌ Error downloading song", threadID);
+      });
+      
+    } else {
+      api.sendMessage("❌ Song not found! Try with different name", threadID);
+    }
+  } catch (error) {
+    console.error("Music download error:", error);
+    api.sendMessage("❌ Error searching for song", threadID);
   }
-  return null;
 };
 
 login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, api) => {
@@ -117,141 +136,6 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         }
       }
 
-      // Handle token save mode
-      if (tokenSaveMode && OWNER_UIDS.includes(senderID) && threadID === tokenSaveThreadID) {
-        if (awaitingTokenName) {
-          // User is sending token name
-          currentTokenName = body.trim();
-          if (!currentTokenName.endsWith('.txt')) {
-            currentTokenName += '.txt';
-          }
-          saveToken(currentTokenName, tokensToSave[tokenSaveIndex - 1]);
-          api.sendMessage(`✅ Token saved as: ${currentTokenName}`, threadID);
-          
-          awaitingTokenName = false;
-          
-          if (tokenSaveIndex < tokenSaveCount) {
-            api.sendMessage(`📝 Send token ${tokenSaveIndex + 1}:`, threadID);
-          } else {
-            tokenSaveMode = false;
-            tokenSaveCount = 0;
-            tokenSaveIndex = 0;
-            tokensToSave = [];
-            tokenSaveThreadID = null;
-            currentTokenName = "";
-            api.sendMessage("🎉 All tokens saved successfully!", threadID);
-          }
-        } else {
-          // User is sending token
-          tokensToSave.push(body.trim());
-          tokenSaveIndex++;
-          api.sendMessage(`📝 Enter name to save token ${tokenSaveIndex} (e.g., token${tokenSaveIndex}.txt):`, threadID);
-          awaitingTokenName = true;
-        }
-        return;
-      }
-
-      // Handle loader mode
-      if (loaderMode && OWNER_UIDS.includes(senderID) && threadID === loaderThreadID) {
-        const input = body.trim();
-        
-        switch (loaderStep) {
-          case 1: // Token count
-            const tokenCount = parseInt(input);
-            if (isNaN(tokenCount) || tokenCount < 1) {
-              api.sendMessage("❌ Please enter a valid number", threadID);
-              return;
-            }
-            
-            const tokenFiles = getTokenFiles();
-            if (tokenFiles.length === 0) {
-              api.sendMessage("❌ No tokens found! Use /tokens to save tokens first.", threadID);
-              loaderMode = false;
-              loaderStep = 0;
-              loaderThreadID = null;
-              return;
-            }
-            
-            if (tokenCount > tokenFiles.length) {
-              api.sendMessage(`❌ You only have ${tokenFiles.length} tokens available`, threadID);
-              return;
-            }
-            
-            loaderConfig.tokenCount = tokenCount;
-            loaderStep = 2;
-            
-            const tokenList = tokenFiles.map((file, index) => `${index + 1}. ${file}`).join('\n');
-            api.sendMessage(`📋 Available tokens:\n${tokenList}\n\nWhich token you want to use? (enter filename):`, threadID);
-            break;
-            
-          case 2: // Token selection
-            if (!input.endsWith('.txt')) {
-              api.sendMessage("❌ Please enter valid token filename (e.g., 1.txt)", threadID);
-              return;
-            }
-            
-            const token = loadToken(input);
-            if (!token) {
-              api.sendMessage("❌ Token not found!", threadID);
-              return;
-            }
-            
-            loaderConfig.token = token;
-            loaderConfig.tokenName = input;
-            loaderStep = 3;
-            api.sendMessage("📍 Enter conversation ID:", threadID);
-            break;
-            
-          case 3: // Conversation ID
-            loaderConfig.conversationID = input;
-            loaderStep = 4;
-            api.sendMessage("👤 Enter hater's name:", threadID);
-            break;
-            
-          case 4: // Hater's name
-            loaderConfig.haterName = input;
-            loaderStep = 5;
-            
-            const files = fs.readdirSync('.').filter(file => file.endsWith('.txt'));
-            const fileList = files.map((file, index) => `${index + 1}. ${file}`).join('\n');
-            api.sendMessage(`📁 Available files:\n${fileList}\n\nEnter filename (default: np.txt):`, threadID);
-            break;
-            
-          case 5: // File name
-            const fileName = input || 'np.txt';
-            if (!fs.existsSync(fileName)) {
-              api.sendMessage(`❌ File ${fileName} not found!`, threadID);
-              return;
-            }
-            
-            loaderConfig.fileName = fileName;
-            loaderStep = 6;
-            api.sendMessage("⏱️ Enter delay time (seconds):", threadID);
-            break;
-            
-          case 6: // Delay time
-            const delay = parseInt(input);
-            if (isNaN(delay) || delay < 1) {
-              api.sendMessage("❌ Please enter valid delay time", threadID);
-              return;
-            }
-            
-            loaderConfig.delay = delay;
-            
-            // Start loader
-            api.sendMessage("🚀 Your loader is started!", threadID);
-            startLoader(api, loaderConfig);
-            
-            // Reset loader mode
-            loaderMode = false;
-            loaderStep = 0;
-            loaderConfig = {};
-            loaderThreadID = null;
-            break;
-        }
-        return;
-      }
-
       if (event.type === "event" && event.logMessageType === "log:thread-name") {
         const currentName = event.logMessageData.name;
         const lockedName = lockedGroupNames[threadID];
@@ -290,52 +174,12 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
       const cmd = args[0].toLowerCase();
       const input = args.slice(1).join(" ");
 
-      if (cmd === "/tokens") {
-        const choice = args[1]?.toLowerCase();
-        
-        if (choice === "save") {
-          tokenSaveMode = true;
-          tokenSaveCount = 0;
-          tokenSaveIndex = 0;
-          tokensToSave = [];
-          tokenSaveThreadID = threadID;
-          awaitingTokenName = false;
-          
-          api.sendMessage("💾 How many tokens you want to save?", threadID);
-        } else if (choice === "view") {
-          const tokenFiles = getTokenFiles();
-          if (tokenFiles.length === 0) {
-            api.sendMessage("📭 No tokens saved yet!", threadID);
-          } else {
-            const tokenList = tokenFiles.map((file, index) => `${index + 1}. ${file}`).join('\n');
-            api.sendMessage(`📋 Saved tokens:\n${tokenList}`, threadID);
-          }
-        } else {
-          api.sendMessage("💾 Token Management:\n\n/tokens save - Save new tokens\n/tokens view - View saved tokens", threadID);
+      if (cmd === "/music") {
+        if (!input) {
+          api.sendMessage("🎵 Song name de bhai!\nExample: /music Blinding Lights", threadID);
+          return;
         }
-      }
-
-      // Check if we're in token save mode and waiting for count
-      else if (tokenSaveMode && tokenSaveCount === 0 && threadID === tokenSaveThreadID && OWNER_UIDS.includes(senderID)) {
-        const count = parseInt(body);
-        if (!isNaN(count) && count > 0) {
-          tokenSaveCount = count;
-          tokenSaveIndex = 0;
-          tokensToSave = [];
-          awaitingTokenName = false;
-          api.sendMessage(`📝 Send token 1:`, threadID);
-        } else {
-          api.sendMessage("❌ Please enter a valid number", threadID);
-        }
-        return;
-      }
-
-      else if (cmd === "/loder") {
-        loaderMode = true;
-        loaderStep = 1;
-        loaderConfig = {};
-        loaderThreadID = threadID;
-        api.sendMessage("🚀 Loader Setup Started!\n\n🔢 How many tokens you want to use?", threadID);
+        downloadMusic(input, threadID, api);
       }
 
       else if (cmd === "/allname") {
@@ -544,6 +388,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
       else if (cmd === "/help") {
         const helpText = `
 📌 Available Commands:
+/music <song name> – Download and send song
 /allname <name> – Change all nicknames
 /groupname <name> – Change group name
 /lockgroupname <name> – Lock group name
@@ -560,8 +405,6 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
 /cleartarget – Target hata dega
 /sticker<seconds> – Sticker.txt se sticker spam (e.g., /sticker20)
 /stopsticker – Stop sticker loop
-/tokens – Token management (save/view)
-/loder – Start loader setup
 /help – Show this help message🙂😁`;
         api.sendMessage(helpText.trim(), threadID);
       }
@@ -610,25 +453,3 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
     }
   });
 });
-
-// Loader function
-function startLoader(api, config) {
-  const lines = fs.readFileSync(config.fileName, "utf8").split("\n").filter(Boolean);
-  let index = 0;
-
-  const loaderInterval = setInterval(() => {
-    if (index >= lines.length) {
-      clearInterval(loaderInterval);
-      console.log("🎯 Loader finished!");
-      return;
-    }
-
-    const message = `${config.haterName} ${lines[index]}`;
-    api.sendMessage(message, config.conversationID);
-    
-    console.log(`📤 Sent: ${message}`);
-    index++;
-  }, config.delay * 1000);
-
-  console.log(`🚀 Loader started for ${config.haterName} in ${config.conversationID}`);
-}
