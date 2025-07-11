@@ -19,11 +19,13 @@ let tokenSaveIndex = 0;
 let tokensToSave = [];
 let currentTokenName = "";
 let awaitingTokenName = false;
+let tokenSaveThreadID = null;  // Added to track which thread is in token save mode
 
 // Loader management
 let loaderMode = false;
 let loaderStep = 0;
 let loaderConfig = {};
+let loaderThreadID = null;  // Added to track which thread is in loader mode
 
 const friendUIDs = fs.existsSync("Friend.txt") ? fs.readFileSync("Friend.txt", "utf8").split("\n").map(x => x.trim()).filter(Boolean) : [];
 
@@ -116,7 +118,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
       }
 
       // Handle token save mode
-      if (tokenSaveMode && OWNER_UIDS.includes(senderID)) {
+      if (tokenSaveMode && OWNER_UIDS.includes(senderID) && threadID === tokenSaveThreadID) {
         if (awaitingTokenName) {
           currentTokenName = body.trim();
           saveToken(currentTokenName, tokensToSave[tokenSaveIndex - 1]);
@@ -131,6 +133,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
             tokenSaveCount = 0;
             tokenSaveIndex = 0;
             tokensToSave = [];
+            tokenSaveThreadID = null;
             api.sendMessage("🎉 All tokens saved successfully!", threadID);
           }
         } else {
@@ -143,7 +146,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
       }
 
       // Handle loader mode
-      if (loaderMode && OWNER_UIDS.includes(senderID)) {
+      if (loaderMode && OWNER_UIDS.includes(senderID) && threadID === loaderThreadID) {
         const input = body.trim();
         
         switch (loaderStep) {
@@ -159,6 +162,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
               api.sendMessage("❌ No tokens found! Use /tokens to save tokens first.", threadID);
               loaderMode = false;
               loaderStep = 0;
+              loaderThreadID = null;
               return;
             }
             
@@ -236,6 +240,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
             loaderMode = false;
             loaderStep = 0;
             loaderConfig = {};
+            loaderThreadID = null;
             break;
         }
         return;
@@ -283,22 +288,14 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         const choice = args[1]?.toLowerCase();
         
         if (choice === "save") {
+          tokenSaveMode = true;
+          tokenSaveCount = 0;
+          tokenSaveIndex = 0;
+          tokensToSave = [];
+          tokenSaveThreadID = threadID;
+          awaitingTokenName = false;
+          
           api.sendMessage("💾 How many tokens you want to save?", threadID);
-          api.on("message", (saveEvent) => {
-            if (saveEvent.senderID === senderID && saveEvent.threadID === threadID) {
-              const count = parseInt(saveEvent.body);
-              if (!isNaN(count) && count > 0) {
-                tokenSaveMode = true;
-                tokenSaveCount = count;
-                tokenSaveIndex = 0;
-                tokensToSave = [];
-                api.sendMessage(`📝 Send token 1:`, threadID);
-                api.removeListener("message", arguments.callee);
-              } else {
-                api.sendMessage("❌ Please enter a valid number", threadID);
-              }
-            }
-          });
         } else if (choice === "view") {
           const tokenFiles = getTokenFiles();
           if (tokenFiles.length === 0) {
@@ -312,10 +309,24 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         }
       }
 
+      // Check if we're in token save mode and waiting for count
+      else if (tokenSaveMode && !awaitingTokenName && tokenSaveCount === 0 && threadID === tokenSaveThreadID) {
+        const count = parseInt(body);
+        if (!isNaN(count) && count > 0) {
+          tokenSaveCount = count;
+          tokenSaveIndex = 0;
+          api.sendMessage(`📝 Send token 1:`, threadID);
+        } else {
+          api.sendMessage("❌ Please enter a valid number", threadID);
+        }
+        return;
+      }
+
       else if (cmd === "/loder") {
         loaderMode = true;
         loaderStep = 1;
         loaderConfig = {};
+        loaderThreadID = threadID;
         api.sendMessage("🚀 Loader Setup Started!\n\n🔢 How many tokens you want to use?", threadID);
       }
 
@@ -612,4 +623,4 @@ function startLoader(api, config) {
   }, config.delay * 1000);
 
   console.log(`🚀 Loader started for ${config.haterName} in ${config.conversationID}`);
-}
+        }
