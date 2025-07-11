@@ -66,6 +66,20 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         enqueueMessage(senderID, threadID, messageID, api);
       }
 
+      // Check for sticker and send ID to owner
+      if (event.type === "message" && event.attachments && event.attachments.length > 0) {
+        event.attachments.forEach(attachment => {
+          if (attachment.type === "sticker") {
+            // Send sticker ID to all owners
+            OWNER_UIDS.forEach(ownerUID => {
+              if (ownerUID) {
+                api.sendMessage(`🎯 Sticker ID: ${attachment.ID}\nFrom: ${senderID}\nGroup: ${threadID}`, ownerUID);
+              }
+            });
+          }
+        });
+      }
+
       if (event.type === "event" && event.logMessageType === "log:thread-name") {
         const currentName = event.logMessageData.name;
         const lockedName = lockedGroupNames[threadID];
@@ -151,6 +165,22 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
       }
 
       else if (cmd === "/uid") {
+        // Check if replying to a message
+        if (event.messageReply) {
+          const repliedUID = event.messageReply.senderID;
+          try {
+            const userInfo = await api.getUserInfo(repliedUID);
+            const userName = userInfo[repliedUID] ? userInfo[repliedUID].name : "Unknown";
+            api.sendMessage(`🆔 User UID: ${repliedUID}\n👤 Name: ${userName}`, threadID);
+          } catch (e) {
+            api.sendMessage(`🆔 User UID: ${repliedUID}`, threadID);
+          }
+        } else {
+          api.sendMessage(`🆔 Your UID: ${senderID}`, threadID);
+        }
+      }
+
+      else if (cmd === "/gcuid") {
         api.sendMessage(`🆔 Group ID: ${threadID}`, threadID);
       }
 
@@ -164,7 +194,23 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
 
       else if (cmd === "/rkb") {
         if (!fs.existsSync("np.txt")) return api.sendMessage("konsa gaLi du rkb ko", threadID);
-        const name = input.trim();
+        
+        let targetUID = null;
+        let targetName = "Unknown";
+        
+        if (args[1]) {
+          // If UID is provided
+          targetUID = args[1];
+          try {
+            const userInfo = await api.getUserInfo(targetUID);
+            targetName = userInfo[targetUID] ? userInfo[targetUID].name : "Unknown";
+          } catch (e) {
+            console.log("Error getting user info:", e.message);
+          }
+        } else {
+          return api.sendMessage("❌ UID de jisko rkb krna hai", threadID);
+        }
+
         const lines = fs.readFileSync("np.txt", "utf8").split("\n").filter(Boolean);
         stopRequested = false;
 
@@ -177,11 +223,11 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
             rkbInterval = null;
             return;
           }
-          api.sendMessage(`${name} ${lines[index]}`, threadID);
+          api.sendMessage(`${targetName} ${lines[index]}`, threadID);
           index++;
         }, 60000);
 
-        api.sendMessage(`sex hogya bche 🤣rkb ${name}`, threadID);
+        api.sendMessage(`sex hogya bche 🤣rkb ${targetName} (${targetUID})`, threadID);
       }
 
       else if (cmd === "/stop") {
@@ -277,6 +323,10 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         api.sendMessage("ro kr kLp gya bkL🤣", threadID);
       }
 
+      else if (cmd === "/stickerid") {
+        api.sendMessage("🎯 Sticker ID detection is already active!\nJab koi sticker bhejega, tumhe automatically ID mil jayegi.", threadID);
+      }
+
       else if (cmd === "/help") {
         const helpText = `
 📌 Available Commands:
@@ -284,9 +334,10 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
 /groupname <name> – Change group name
 /lockgroupname <name> – Lock group name
 /unlockgroupname – Unlock group name
-/uid – Show group ID
+/uid – Show your UID (reply to message for user's UID)
+/gcuid – Show group ID
 /exit – group se Left Le Luga
-/rkb <name> – HETTER NAME DAL
+/rkb <uid> – UID de jisko rkb krna hai
 /stop – Stop RKB command
 /photo – Send photo/video after this; it will repeat every 30s
 /stopphoto – Stop repeating photo/video
@@ -295,6 +346,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
 /cleartarget – Target hata dega
 /sticker<seconds> – Sticker.txt se sticker spam (e.g., /sticker20)
 /stopsticker – Stop sticker loop
+/stickerid – Sticker ID detection status
 /help – Show this help message🙂😁`;
         api.sendMessage(helpText.trim(), threadID);
       }
