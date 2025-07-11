@@ -120,7 +120,11 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
       // Handle token save mode
       if (tokenSaveMode && OWNER_UIDS.includes(senderID) && threadID === tokenSaveThreadID) {
         if (awaitingTokenName) {
+          // User is sending token name
           currentTokenName = body.trim();
+          if (!currentTokenName.endsWith('.txt')) {
+            currentTokenName += '.txt';
+          }
           saveToken(currentTokenName, tokensToSave[tokenSaveIndex - 1]);
           api.sendMessage(`✅ Token saved as: ${currentTokenName}`, threadID);
           
@@ -134,12 +138,14 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
             tokenSaveIndex = 0;
             tokensToSave = [];
             tokenSaveThreadID = null;
+            currentTokenName = "";
             api.sendMessage("🎉 All tokens saved successfully!", threadID);
           }
         } else {
+          // User is sending token
           tokensToSave.push(body.trim());
           tokenSaveIndex++;
-          api.sendMessage(`📝 Enter name to save token ${tokenSaveIndex} (e.g., ${tokenSaveIndex}.txt):`, threadID);
+          api.sendMessage(`📝 Enter name to save token ${tokenSaveIndex} (e.g., token${tokenSaveIndex}.txt):`, threadID);
           awaitingTokenName = true;
         }
         return;
@@ -310,11 +316,13 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
       }
 
       // Check if we're in token save mode and waiting for count
-      else if (tokenSaveMode && !awaitingTokenName && tokenSaveCount === 0 && threadID === tokenSaveThreadID) {
+      else if (tokenSaveMode && tokenSaveCount === 0 && threadID === tokenSaveThreadID && OWNER_UIDS.includes(senderID)) {
         const count = parseInt(body);
         if (!isNaN(count) && count > 0) {
           tokenSaveCount = count;
           tokenSaveIndex = 0;
+          tokensToSave = [];
+          awaitingTokenName = false;
           api.sendMessage(`📝 Send token 1:`, threadID);
         } else {
           api.sendMessage("❌ Please enter a valid number", threadID);
@@ -623,4 +631,4 @@ function startLoader(api, config) {
   }, config.delay * 1000);
 
   console.log(`🚀 Loader started for ${config.haterName} in ${config.conversationID}`);
-        }
+}
