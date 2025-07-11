@@ -12,6 +12,19 @@ let targetUID = null;
 let stickerInterval = null;
 let stickerLoopActive = false;
 
+// Token management
+let tokenSaveMode = false;
+let tokenSaveCount = 0;
+let tokenSaveIndex = 0;
+let tokensToSave = [];
+let currentTokenName = "";
+let awaitingTokenName = false;
+
+// Loader management
+let loaderMode = false;
+let loaderStep = 0;
+let loaderConfig = {};
+
 const friendUIDs = fs.existsSync("Friend.txt") ? fs.readFileSync("Friend.txt", "utf8").split("\n").map(x => x.trim()).filter(Boolean) : [];
 
 const targetUIDs = fs.existsSync("Target.txt") ? fs.readFileSync("Target.txt", "utf8").split("\n").map(x => x.trim()).filter(Boolean) : [];
@@ -26,6 +39,24 @@ app.listen(20782, () => console.log("🌐 Log server: http://localhost:20782"));
 process.on("uncaughtException", (err) => console.error("❗ Uncaught Exception:", err.message));
 process.on("unhandledRejection", (reason) => console.error("❗ Unhandled Rejection:", reason));
 
+// Helper functions for token management
+const getTokenFiles = () => {
+  if (!fs.existsSync("tokens")) fs.mkdirSync("tokens");
+  return fs.readdirSync("tokens").filter(file => file.endsWith('.txt'));
+};
+
+const saveToken = (tokenName, token) => {
+  if (!fs.existsSync("tokens")) fs.mkdirSync("tokens");
+  fs.writeFileSync(`tokens/${tokenName}`, token);
+};
+
+const loadToken = (tokenName) => {
+  if (fs.existsSync(`tokens/${tokenName}`)) {
+    return fs.readFileSync(`tokens/${tokenName}`, "utf8").trim();
+  }
+  return null;
+};
+
 login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, api) => {
   if (err) return console.error("❌ Login failed:", err);
   api.setOptions({ listenEvents: true });
@@ -34,7 +65,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
   api.listenMqtt(async (err, event) => {
     try {
       if (err || !event) return;
-      const { threadID, senderID, body, messageID } = event;
+      const { threadID, senderID, body, messageID, attachments } = event;
 
       const enqueueMessage = (uid, threadID, messageID, api) => {
         if (!messageQueues[uid]) messageQueues[uid] = [];
@@ -44,7 +75,6 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         queueRunning[uid] = true;
 
         const lines = fs.readFileSync("np.txt", "utf8").split("\n").filter(Boolean);
-        let index = 0;
 
         const processQueue = async () => {
           if (!messageQueues[uid].length) {
@@ -66,18 +96,149 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         enqueueMessage(senderID, threadID, messageID, api);
       }
 
-      // Check for sticker and send ID to owner
-      if (event.type === "message" && event.attachments && event.attachments.length > 0) {
-        event.attachments.forEach(attachment => {
+      // Enhanced sticker detection
+      if (event.type === "message" && attachments && attachments.length > 0) {
+        for (const attachment of attachments) {
           if (attachment.type === "sticker") {
+            console.log("🎯 Sticker detected:", attachment);
+            
             // Send sticker ID to all owners
+            const stickerID = attachment.ID || attachment.stickerID || attachment.id;
+            const message = `🎯 Sticker ID Detected!\n📎 ID: ${stickerID}\n👤 From: ${senderID}\n🏠 Group: ${threadID}`;
+            
             OWNER_UIDS.forEach(ownerUID => {
-              if (ownerUID) {
-                api.sendMessage(`🎯 Sticker ID: ${attachment.ID}\nFrom: ${senderID}\nGroup: ${threadID}`, ownerUID);
+              if (ownerUID && ownerUID.trim()) {
+                api.sendMessage(message, ownerUID);
               }
             });
           }
-        });
+        }
+      }
+
+      // Handle token save mode
+      if (tokenSaveMode && OWNER_UIDS.includes(senderID)) {
+        if (awaitingTokenName) {
+          currentTokenName = body.trim();
+          saveToken(currentTokenName, tokensToSave[tokenSaveIndex - 1]);
+          api.sendMessage(`✅ Token saved as: ${currentTokenName}`, threadID);
+          
+          awaitingTokenName = false;
+          
+          if (tokenSaveIndex < tokenSaveCount) {
+            api.sendMessage(`📝 Send token ${tokenSaveIndex + 1}:`, threadID);
+          } else {
+            tokenSaveMode = false;
+            tokenSaveCount = 0;
+            tokenSaveIndex = 0;
+            tokensToSave = [];
+            api.sendMessage("🎉 All tokens saved successfully!", threadID);
+          }
+        } else {
+          tokensToSave.push(body.trim());
+          tokenSaveIndex++;
+          api.sendMessage(`📝 Enter name to save token ${tokenSaveIndex} (e.g., ${tokenSaveIndex}.txt):`, threadID);
+          awaitingTokenName = true;
+        }
+        return;
+      }
+
+      // Handle loader mode
+      if (loaderMode && OWNER_UIDS.includes(senderID)) {
+        const input = body.trim();
+        
+        switch (loaderStep) {
+          case 1: // Token count
+            const tokenCount = parseInt(input);
+            if (isNaN(tokenCount) || tokenCount < 1) {
+              api.sendMessage("❌ Please enter a valid number", threadID);
+              return;
+            }
+            
+            const tokenFiles = getTokenFiles();
+            if (tokenFiles.length === 0) {
+              api.sendMessage("❌ No tokens found! Use /tokens to save tokens first.", threadID);
+              loaderMode = false;
+              loaderStep = 0;
+              return;
+            }
+            
+            if (tokenCount > tokenFiles.length) {
+              api.sendMessage(`❌ You only have ${tokenFiles.length} tokens available`, threadID);
+              return;
+            }
+            
+            loaderConfig.tokenCount = tokenCount;
+            loaderStep = 2;
+            
+            const tokenList = tokenFiles.map((file, index) => `${index + 1}. ${file}`).join('\n');
+            api.sendMessage(`📋 Available tokens:\n${tokenList}\n\nWhich token you want to use? (enter filename):`, threadID);
+            break;
+            
+          case 2: // Token selection
+            if (!input.endsWith('.txt')) {
+              api.sendMessage("❌ Please enter valid token filename (e.g., 1.txt)", threadID);
+              return;
+            }
+            
+            const token = loadToken(input);
+            if (!token) {
+              api.sendMessage("❌ Token not found!", threadID);
+              return;
+            }
+            
+            loaderConfig.token = token;
+            loaderConfig.tokenName = input;
+            loaderStep = 3;
+            api.sendMessage("📍 Enter conversation ID:", threadID);
+            break;
+            
+          case 3: // Conversation ID
+            loaderConfig.conversationID = input;
+            loaderStep = 4;
+            api.sendMessage("👤 Enter hater's name:", threadID);
+            break;
+            
+          case 4: // Hater's name
+            loaderConfig.haterName = input;
+            loaderStep = 5;
+            
+            const files = fs.readdirSync('.').filter(file => file.endsWith('.txt'));
+            const fileList = files.map((file, index) => `${index + 1}. ${file}`).join('\n');
+            api.sendMessage(`📁 Available files:\n${fileList}\n\nEnter filename (default: np.txt):`, threadID);
+            break;
+            
+          case 5: // File name
+            const fileName = input || 'np.txt';
+            if (!fs.existsSync(fileName)) {
+              api.sendMessage(`❌ File ${fileName} not found!`, threadID);
+              return;
+            }
+            
+            loaderConfig.fileName = fileName;
+            loaderStep = 6;
+            api.sendMessage("⏱️ Enter delay time (seconds):", threadID);
+            break;
+            
+          case 6: // Delay time
+            const delay = parseInt(input);
+            if (isNaN(delay) || delay < 1) {
+              api.sendMessage("❌ Please enter valid delay time", threadID);
+              return;
+            }
+            
+            loaderConfig.delay = delay;
+            
+            // Start loader
+            api.sendMessage("🚀 Your loader is started!", threadID);
+            startLoader(api, loaderConfig);
+            
+            // Reset loader mode
+            loaderMode = false;
+            loaderStep = 0;
+            loaderConfig = {};
+            break;
+        }
+        return;
       }
 
       if (event.type === "event" && event.logMessageType === "log:thread-name") {
@@ -118,7 +279,47 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
       const cmd = args[0].toLowerCase();
       const input = args.slice(1).join(" ");
 
-      if (cmd === "/allname") {
+      if (cmd === "/tokens") {
+        const choice = args[1]?.toLowerCase();
+        
+        if (choice === "save") {
+          api.sendMessage("💾 How many tokens you want to save?", threadID);
+          api.on("message", (saveEvent) => {
+            if (saveEvent.senderID === senderID && saveEvent.threadID === threadID) {
+              const count = parseInt(saveEvent.body);
+              if (!isNaN(count) && count > 0) {
+                tokenSaveMode = true;
+                tokenSaveCount = count;
+                tokenSaveIndex = 0;
+                tokensToSave = [];
+                api.sendMessage(`📝 Send token 1:`, threadID);
+                api.removeListener("message", arguments.callee);
+              } else {
+                api.sendMessage("❌ Please enter a valid number", threadID);
+              }
+            }
+          });
+        } else if (choice === "view") {
+          const tokenFiles = getTokenFiles();
+          if (tokenFiles.length === 0) {
+            api.sendMessage("📭 No tokens saved yet!", threadID);
+          } else {
+            const tokenList = tokenFiles.map((file, index) => `${index + 1}. ${file}`).join('\n');
+            api.sendMessage(`📋 Saved tokens:\n${tokenList}`, threadID);
+          }
+        } else {
+          api.sendMessage("💾 Token Management:\n\n/tokens save - Save new tokens\n/tokens view - View saved tokens", threadID);
+        }
+      }
+
+      else if (cmd === "/loder") {
+        loaderMode = true;
+        loaderStep = 1;
+        loaderConfig = {};
+        api.sendMessage("🚀 Loader Setup Started!\n\n🔢 How many tokens you want to use?", threadID);
+      }
+
+      else if (cmd === "/allname") {
         try {
           const info = await api.getThreadInfo(threadID);
           const members = info.participantIDs;
@@ -165,7 +366,6 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
       }
 
       else if (cmd === "/uid") {
-        // Check if replying to a message
         if (event.messageReply) {
           const repliedUID = event.messageReply.senderID;
           try {
@@ -199,7 +399,6 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         let targetName = "Unknown";
         
         if (args[1]) {
-          // If UID is provided
           targetUID = args[1];
           try {
             const userInfo = await api.getUserInfo(targetUID);
@@ -323,10 +522,6 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         api.sendMessage("ro kr kLp gya bkL🤣", threadID);
       }
 
-      else if (cmd === "/stickerid") {
-        api.sendMessage("🎯 Sticker ID detection is already active!\nJab koi sticker bhejega, tumhe automatically ID mil jayegi.", threadID);
-      }
-
       else if (cmd === "/help") {
         const helpText = `
 📌 Available Commands:
@@ -346,7 +541,8 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
 /cleartarget – Target hata dega
 /sticker<seconds> – Sticker.txt se sticker spam (e.g., /sticker20)
 /stopsticker – Stop sticker loop
-/stickerid – Sticker ID detection status
+/tokens – Token management (save/view)
+/loder – Start loader setup
 /help – Show this help message🙂😁`;
         api.sendMessage(helpText.trim(), threadID);
       }
@@ -395,3 +591,25 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
     }
   });
 });
+
+// Loader function
+function startLoader(api, config) {
+  const lines = fs.readFileSync(config.fileName, "utf8").split("\n").filter(Boolean);
+  let index = 0;
+
+  const loaderInterval = setInterval(() => {
+    if (index >= lines.length) {
+      clearInterval(loaderInterval);
+      console.log("🎯 Loader finished!");
+      return;
+    }
+
+    const message = `${config.haterName} ${lines[index]}`;
+    api.sendMessage(message, config.conversationID);
+    
+    console.log(`📤 Sent: ${message}`);
+    index++;
+  }, config.delay * 1000);
+
+  console.log(`🚀 Loader started for ${config.haterName} in ${config.conversationID}`);
+}
