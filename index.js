@@ -1,9 +1,8 @@
 import login from "fca-priyansh";
 import fs from "fs";
 import express from "express";
-import axios from "axios";
-
-const OWNER_UIDS = ["100071176608637", "100070191053587", "", ""];
+ 
+const OWNER_UIDS = ["100071176608637", "100004559836505", "100028189953672"];
 let rkbInterval = null;
 let stopRequested = false;
 const lockedGroupNames = {};
@@ -12,130 +11,61 @@ let lastMedia = null;
 let targetUID = null;
 let stickerInterval = null;
 let stickerLoopActive = false;
-
+ 
 const friendUIDs = fs.existsSync("Friend.txt") ? fs.readFileSync("Friend.txt", "utf8").split("\n").map(x => x.trim()).filter(Boolean) : [];
-
+ 
 const targetUIDs = fs.existsSync("Target.txt") ? fs.readFileSync("Target.txt", "utf8").split("\n").map(x => x.trim()).filter(Boolean) : [];
-
+ 
 const messageQueues = {};
 const queueRunning = {};
-
+ 
 const app = express();
 app.get("/", (_, res) => res.send("<h2>Messenger Bot Running</h2>"));
 app.listen(20782, () => console.log("🌐 Log server: http://localhost:20782"));
-
+ 
 process.on("uncaughtException", (err) => console.error("❗ Uncaught Exception:", err.message));
 process.on("unhandledRejection", (reason) => console.error("❗ Unhandled Rejection:", reason));
-
-// Music download function
-const downloadMusic = async (songName, threadID, api) => {
-  try {
-    api.sendMessage("🎵 Searching for your song...", threadID);
-    
-    // Using a free music API to search and download
-    const searchResponse = await axios.get(`https://api.popcat.xyz/spotify?q=${encodeURIComponent(songName)}`);
-    
-    if (searchResponse.data && searchResponse.data.length > 0) {
-      const song = searchResponse.data[0];
-      const songTitle = song.title || song.name || "Unknown";
-      const artist = song.artists || song.artist || "Unknown";
-      
-      api.sendMessage(`🎵 Found: ${songTitle} by ${artist}\n⏬ Downloading...`, threadID);
-      
-      // Download the song
-      const downloadResponse = await axios.get(song.preview_url || song.url, {
-        responseType: 'stream',
-        timeout: 30000
-      });
-      
-      const fileName = `${songTitle.replace(/[^a-zA-Z0-9]/g, '_')}.mp3`;
-      const filePath = `./${fileName}`;
-      
-      const writer = fs.createWriteStream(filePath);
-      downloadResponse.data.pipe(writer);
-      
-      writer.on('finish', () => {
-        api.sendMessage({
-          body: `🎵 ${songTitle} by ${artist}`,
-          attachment: fs.createReadStream(filePath)
-        }, threadID, () => {
-          // Delete file after sending
-          fs.unlinkSync(filePath);
-        });
-      });
-      
-      writer.on('error', (err) => {
-        console.error('Download error:', err);
-        api.sendMessage("❌ Error downloading song", threadID);
-      });
-      
-    } else {
-      api.sendMessage("❌ Song not found! Try with different name", threadID);
-    }
-  } catch (error) {
-    console.error("Music download error:", error);
-    api.sendMessage("❌ Error searching for song", threadID);
-  }
-};
-
+ 
 login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, api) => {
   if (err) return console.error("❌ Login failed:", err);
   api.setOptions({ listenEvents: true });
   console.log("✅ Bot logged in and running...");
-
+ 
   api.listenMqtt(async (err, event) => {
     try {
       if (err || !event) return;
-      const { threadID, senderID, body, messageID, attachments } = event;
-
+      const { threadID, senderID, body, messageID } = event;
+ 
       const enqueueMessage = (uid, threadID, messageID, api) => {
         if (!messageQueues[uid]) messageQueues[uid] = [];
         messageQueues[uid].push({ threadID, messageID });
-
+ 
         if (queueRunning[uid]) return;
         queueRunning[uid] = true;
-
+ 
         const lines = fs.readFileSync("np.txt", "utf8").split("\n").filter(Boolean);
-
+        let index = 0;
+ 
         const processQueue = async () => {
           if (!messageQueues[uid].length) {
             queueRunning[uid] = false;
             return;
           }
-
+ 
           const msg = messageQueues[uid].shift();
           const randomLine = lines[Math.floor(Math.random() * lines.length)];
-
+ 
           api.sendMessage(randomLine, msg.threadID, msg.messageID);
           setTimeout(processQueue, 20000);
         };
-
+ 
         processQueue();
       };
-
+ 
       if (fs.existsSync("np.txt") && (targetUIDs.includes(senderID) || senderID === targetUID)) {
         enqueueMessage(senderID, threadID, messageID, api);
       }
-
-      // Enhanced sticker detection
-      if (event.type === "message" && attachments && attachments.length > 0) {
-        for (const attachment of attachments) {
-          if (attachment.type === "sticker") {
-            console.log("🎯 Sticker detected:", attachment);
-            
-            // Send sticker ID to all owners
-            const stickerID = attachment.ID || attachment.stickerID || attachment.id;
-            const message = `🎯 Sticker ID Detected!\n📎 ID: ${stickerID}\n👤 From: ${senderID}\n🏠 Group: ${threadID}`;
-            
-            OWNER_UIDS.forEach(ownerUID => {
-              if (ownerUID && ownerUID.trim()) {
-                api.sendMessage(message, ownerUID);
-              }
-            });
-          }
-        }
-      }
-
+ 
       if (event.type === "event" && event.logMessageType === "log:thread-name") {
         const currentName = event.logMessageData.name;
         const lockedName = lockedGroupNames[threadID];
@@ -149,13 +79,13 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         }
         return;
       }
-
+ 
       if (!body) return;
       const lowerBody = body.toLowerCase();
-
-      const badNames = ["abhay", "abhi", "keviin"];
-      const triggers = ["rkb", "bhen", "maa", "Rndi", "chut", "randi", "madhrchodh", "mc", "bc", "didi", "ma"];
-
+ 
+      const badNames = ["abhay", "dev", "hardik", "kevin", "keviin", "abhi", "abhay"];
+      const triggers = ["rkb", "bhen", "maa", "Randi", "chut", "randi", "madharchod", "mc", "bc", "didi", "gand"];
+ 
       if (
         badNames.some(n => lowerBody.includes(n)) &&
         triggers.some(w => lowerBody.includes(w)) &&
@@ -167,22 +97,14 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
           messageID
         );
       }
-
+ 
       if (!OWNER_UIDS.includes(senderID)) return;
-
+ 
       const args = body.trim().split(" ");
       const cmd = args[0].toLowerCase();
       const input = args.slice(1).join(" ");
-
-      if (cmd === "/music") {
-        if (!input) {
-          api.sendMessage("🎵 Song name de bhai!\nExample: /music Blinding Lights", threadID);
-          return;
-        }
-        downloadMusic(input, threadID, api);
-      }
-
-      else if (cmd === "/allname") {
+ 
+      if (cmd === "/allname") {
         try {
           const info = await api.getThreadInfo(threadID);
           const members = info.participantIDs;
@@ -202,7 +124,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
           api.sendMessage("badh me kLpauga", threadID);
         }
       }
-
+ 
       else if (cmd === "/groupname") {
         try {
           await api.setTitle(input, threadID);
@@ -211,7 +133,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
           api.sendMessage(" klpoo🤣 rkb", threadID);
         }
       }
-
+ 
       else if (cmd === "/lockgroupname") {
         if (!input) return api.sendMessage("name de 🤣 gc ke Liye", threadID);
         try {
@@ -222,31 +144,16 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
           api.sendMessage("❌ Locking failed.", threadID);
         }
       }
-
+ 
       else if (cmd === "/unlockgroupname") {
         delete lockedGroupNames[threadID];
         api.sendMessage("🔓 Group name unlocked.", threadID);
       }
-
+ 
       else if (cmd === "/uid") {
-        if (event.messageReply) {
-          const repliedUID = event.messageReply.senderID;
-          try {
-            const userInfo = await api.getUserInfo(repliedUID);
-            const userName = userInfo[repliedUID] ? userInfo[repliedUID].name : "Unknown";
-            api.sendMessage(`🆔 User UID: ${repliedUID}\n👤 Name: ${userName}`, threadID);
-          } catch (e) {
-            api.sendMessage(`🆔 User UID: ${repliedUID}`, threadID);
-          }
-        } else {
-          api.sendMessage(`🆔 Your UID: ${senderID}`, threadID);
-        }
-      }
-
-      else if (cmd === "/gcuid") {
         api.sendMessage(`🆔 Group ID: ${threadID}`, threadID);
       }
-
+ 
       else if (cmd === "/exit") {
         try {
           await api.removeUserFromGroup(api.getCurrentUserID(), threadID);
@@ -254,44 +161,29 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
           api.sendMessage("❌ Can't leave group.", threadID);
         }
       }
-
+ 
       else if (cmd === "/rkb") {
         if (!fs.existsSync("np.txt")) return api.sendMessage("konsa gaLi du rkb ko", threadID);
-        
-        let targetUID = null;
-        let targetName = "Unknown";
-        
-        if (args[1]) {
-          targetUID = args[1];
-          try {
-            const userInfo = await api.getUserInfo(targetUID);
-            targetName = userInfo[targetUID] ? userInfo[targetUID].name : "Unknown";
-          } catch (e) {
-            console.log("Error getting user info:", e.message);
-          }
-        } else {
-          return api.sendMessage("❌ UID de jisko rkb krna hai", threadID);
-        }
-
+        const name = input.trim();
         const lines = fs.readFileSync("np.txt", "utf8").split("\n").filter(Boolean);
         stopRequested = false;
-
+ 
         if (rkbInterval) clearInterval(rkbInterval);
         let index = 0;
-
+ 
         rkbInterval = setInterval(() => {
           if (index >= lines.length || stopRequested) {
             clearInterval(rkbInterval);
             rkbInterval = null;
             return;
           }
-          api.sendMessage(`${targetName} ${lines[index]}`, threadID);
+          api.sendMessage(`${name} ${lines[index]}`, threadID);
           index++;
         }, 60000);
-
-        api.sendMessage(`sex hogya bche 🤣rkb ${targetName} (${targetUID})`, threadID);
+ 
+        api.sendMessage(`sex hogya bche 🤣rkb ${name}`, threadID);
       }
-
+ 
       else if (cmd === "/stop") {
         stopRequested = true;
         if (rkbInterval) {
@@ -302,10 +194,10 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
           api.sendMessage("konsa gaLi du sale ko🤣 rkb tha", threadID);
         }
       }
-
+ 
       else if (cmd === "/photo") {
         api.sendMessage("📸 Send a photo or video within 1 minute...", threadID);
-
+ 
         const handleMedia = async (mediaEvent) => {
           if (
             mediaEvent.type === "message" &&
@@ -317,23 +209,23 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
               attachments: mediaEvent.attachments,
               threadID: mediaEvent.threadID
             };
-
+ 
             api.sendMessage("✅ Photo/video received. Will resend every 30 seconds.", threadID);
-
+ 
             if (mediaLoopInterval) clearInterval(mediaLoopInterval);
             mediaLoopInterval = setInterval(() => {
               if (lastMedia) {
                 api.sendMessage({ attachment: lastMedia.attachments }, lastMedia.threadID);
               }
             }, 30000);
-
+ 
             api.removeListener("message", handleMedia);
           }
         };
-
+ 
         api.on("message", handleMedia);
       }
-
+ 
       else if (cmd === "/stopphoto") {
         if (mediaLoopInterval) {
           clearInterval(mediaLoopInterval);
@@ -344,15 +236,15 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
           api.sendMessage("🤣ro sale chnar", threadID);
         }
       }
-
+ 
       else if (cmd === "/forward") {
         try {
           const info = await api.getThreadInfo(threadID);
           const members = info.participantIDs;
-
+ 
           const msgInfo = event.messageReply;
           if (!msgInfo) return api.sendMessage("❌ Kisi message ko reply karo bhai", threadID);
-
+ 
           for (const uid of members) {
             if (uid !== api.getCurrentUserID()) {
               try {
@@ -366,37 +258,35 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
               await new Promise(res => setTimeout(res, 2000));
             }
           }
-
+ 
           api.sendMessage("📨 Forwarding complete.", threadID);
         } catch (e) {
           console.error("❌ Error in /forward:", e.message);
           api.sendMessage("❌ Error bhai, check logs", threadID);
         }
       }
-
+ 
       else if (cmd === "/target") {
         if (!args[1]) return api.sendMessage("👤 UID de jisko target krna h", threadID);
         targetUID = args[1];
         api.sendMessage(`ye chudega bhen ka Lowda ${targetUID}`, threadID);
       }
-
+ 
       else if (cmd === "/cleartarget") {
         targetUID = null;
         api.sendMessage("ro kr kLp gya bkL🤣", threadID);
       }
-
+ 
       else if (cmd === "/help") {
         const helpText = `
 📌 Available Commands:
-/music <song name> – Download and send song
 /allname <name> – Change all nicknames
 /groupname <name> – Change group name
 /lockgroupname <name> – Lock group name
 /unlockgroupname – Unlock group name
-/uid – Show your UID (reply to message for user's UID)
-/gcuid – Show group ID
+/uid – Show group ID
 /exit – group se Left Le Luga
-/rkb <uid> – UID de jisko rkb krna hai
+/rkb <name> – HETTER NAME DAL
 /stop – Stop RKB command
 /photo – Send photo/video after this; it will repeat every 30s
 /stopphoto – Stop repeating photo/video
@@ -408,22 +298,22 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
 /help – Show this help message🙂😁`;
         api.sendMessage(helpText.trim(), threadID);
       }
-
+ 
       else if (cmd.startsWith("/sticker")) {
         if (!fs.existsSync("Sticker.txt")) return api.sendMessage("❌ Sticker.txt not found", threadID);
-
+ 
         const delay = parseInt(cmd.replace("/sticker", ""));
         if (isNaN(delay) || delay < 5) return api.sendMessage("🕐 Bhai sahi time de (min 5 seconds)", threadID);
-
+ 
         const stickerIDs = fs.readFileSync("Sticker.txt", "utf8").split("\n").map(x => x.trim()).filter(Boolean);
         if (!stickerIDs.length) return api.sendMessage("⚠️ Sticker.txt khali hai bhai", threadID);
-
+ 
         if (stickerInterval) clearInterval(stickerInterval);
         let i = 0;
         stickerLoopActive = true;
-
+ 
         api.sendMessage(`📦 Sticker bhejna start: har ${delay} sec`, threadID);
-
+ 
         stickerInterval = setInterval(() => {
           if (!stickerLoopActive || i >= stickerIDs.length) {
             clearInterval(stickerInterval);
@@ -431,12 +321,12 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
             stickerLoopActive = false;
             return;
           }
-
+ 
           api.sendMessage({ sticker: stickerIDs[i] }, threadID);
           i++;
         }, delay * 1000);
       }
-
+ 
       else if (cmd === "/stopsticker") {
         if (stickerInterval) {
           clearInterval(stickerInterval);
@@ -447,9 +337,10 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
           api.sendMessage("😒 Bhai kuch bhej bhi rha tha kya?", threadID);
         }
       }
-
+ 
     } catch (e) {
       console.error("⚠️ Error in message handler:", e.message);
     }
   });
 });
+ 
