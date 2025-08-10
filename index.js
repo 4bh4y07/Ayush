@@ -14,13 +14,41 @@ let autoGcNameText = null;
 let autoGcNameThreadID = null;
 
 // Ban system
-const bannedUIDs = fs.existsSync("Banned.txt") ? fs.readFileSync("Banned.txt", "utf8").split("\n").map(x => x.trim()).filter(Boolean) : [];
-const saveBannedUsers = () => fs.writeFileSync("Banned.txt", bannedUIDs.join("\n"));
+let bannedUIDs = [];
+if (fs.existsSync("Banned.txt")) {
+  try {
+    bannedUIDs = fs.readFileSync("Banned.txt", "utf8").split("\n").map(x => x.trim()).filter(Boolean);
+  } catch (e) {
+    console.log("Error reading Banned.txt:", e.message);
+  }
+}
+
+const saveBannedUsers = () => {
+  try {
+    fs.writeFileSync("Banned.txt", bannedUIDs.join("\n"));
+  } catch (e) {
+    console.log("Error saving banned users:", e.message);
+  }
+};
 
 // Auto reply system
 let autoReplyEnabled = {};
-const autoReplies = fs.existsSync("AutoReply.json") ? JSON.parse(fs.readFileSync("AutoReply.json", "utf8")) : {};
-const saveAutoReplies = () => fs.writeFileSync("AutoReply.json", JSON.stringify(autoReplies, null, 2));
+let autoReplies = {};
+if (fs.existsSync("AutoReply.json")) {
+  try {
+    autoReplies = JSON.parse(fs.readFileSync("AutoReply.json", "utf8"));
+  } catch (e) {
+    console.log("Error reading AutoReply.json:", e.message);
+  }
+}
+
+const saveAutoReplies = () => {
+  try {
+    fs.writeFileSync("AutoReply.json", JSON.stringify(autoReplies, null, 2));
+  } catch (e) {
+    console.log("Error saving auto replies:", e.message);
+  }
+};
 
 const friendUIDs = fs.existsSync("Friend.txt") ? fs.readFileSync("Friend.txt", "utf8").split("\n").map(x => x.trim()).filter(Boolean) : [];
 const targetUIDs = fs.existsSync("Target.txt") ? fs.readFileSync("Target.txt", "utf8").split("\n").map(x => x.trim()).filter(Boolean) : [];
@@ -30,7 +58,7 @@ const queueRunning = {};
 
 const app = express();
 app.get("/", (_, res) => res.send("<h2>Messenger Bot Running</h2>"));
-app.listen(8083, () => console.log("🌐 Log server: http://localhost:8083"));
+app.listen(20782, () => console.log("🌐 Log server: http://localhost:20782"));
 
 process.on("uncaughtException", (err) => console.error("❗ Uncaught Exception:", err.message));
 process.on("unhandledRejection", (reason) => console.error("❗ Unhandled Rejection:", reason));
@@ -52,6 +80,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         if (queueRunning[uid]) return;
         queueRunning[uid] = true;
 
+        if (!fs.existsSync("np.txt")) return;
         const lines = fs.readFileSync("np.txt", "utf8").split("\n").filter(Boolean);
 
         const processQueue = async () => {
@@ -63,7 +92,11 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
           const msg = messageQueues[uid].shift();
           const randomLine = lines[Math.floor(Math.random() * lines.length)];
 
-          api.sendMessage(randomLine, msg.threadID, msg.messageID);
+          try {
+            api.sendMessage(randomLine, msg.threadID, msg.messageID);
+          } catch (e) {
+            console.log("Error in queue message:", e.message);
+          }
           setTimeout(processQueue, 20000);
         };
 
@@ -100,7 +133,11 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
       if (autoReplyEnabled[threadID] && !OWNER_UIDS.includes(senderID)) {
         for (const keyword in autoReplies) {
           if (lowerBody.includes(keyword.toLowerCase())) {
-            api.sendMessage(autoReplies[keyword], threadID, messageID);
+            try {
+              api.sendMessage(autoReplies[keyword], threadID, messageID);
+            } catch (e) {
+              console.log("Error in auto reply:", e.message);
+            }
             break;
           }
         }
@@ -136,12 +173,12 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
             try {
               await api.changeNickname(input, threadID, uid);
               console.log(`✅ Nickname changed for UID: ${uid}`);
-              await new Promise(res => setTimeout(res, 30000));
+              await new Promise(res => setTimeout(res, 3000));
             } catch (e) {
               console.log(`⚠️ Failed for ${uid}:`, e.message);
             }
           }
-          api.sendMessage("✅ All nicknames changed successfully!", threadID);
+          api.sendMessage("✅ All nicknames changed!", threadID);
         } catch (e) {
           console.error("❌ Error in /allname:", e);
           api.sendMessage("❌ Error changing nicknames", threadID);
@@ -152,7 +189,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         try {
           await api.setTitle(input, threadID);
           api.sendMessage(`📝 Group name changed to: ${input}`, threadID);
-        } catch {
+        } catch (e) {
           api.sendMessage("❌ Failed to change group name", threadID);
         }
       }
@@ -163,7 +200,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
           await api.setTitle(input, threadID);
           lockedGroupNames[threadID] = input;
           api.sendMessage(`🔒 Group name locked to: "${input}"`, threadID);
-        } catch {
+        } catch (e) {
           api.sendMessage("❌ Locking failed.", threadID);
         }
       }
@@ -177,7 +214,80 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         api.sendMessage(`🆔 Group ID: ${threadID}`, threadID);
       }
 
-      // NEW COMMAND: /ban - Ban a user
+      else if (cmd === "/id") {
+        if (!messageReply) {
+          return api.sendMessage("❌ Please reply to someone's message to get their UID", threadID);
+        }
+        api.sendMessage(`🆔 User ID: ${messageReply.senderID}`, threadID);
+      }
+
+      else if (cmd === "/autogcname") {
+        if (!input) {
+          return api.sendMessage("❌ Please provide text for auto group name\nUsage: /autogcname your text here", threadID);
+        }
+
+        if (autoGcNameInterval) {
+          clearInterval(autoGcNameInterval);
+        }
+
+        autoGcNameText = input;
+        autoGcNameThreadID = threadID;
+
+        api.sendMessage(`✅ Auto group name started: "${input}" will change every 30 seconds`, threadID);
+
+        autoGcNameInterval = setInterval(async () => {
+          try {
+            await api.setTitle(autoGcNameText, autoGcNameThreadID);
+          } catch (e) {
+            console.error("❌ Error in auto group name:", e.message);
+          }
+        }, 30000);
+      }
+
+      else if (cmd === "/stopautogcname") {
+        if (autoGcNameInterval) {
+          clearInterval(autoGcNameInterval);
+          autoGcNameInterval = null;
+          autoGcNameText = null;
+          autoGcNameThreadID = null;
+          api.sendMessage("🛑 Auto group name stopped", threadID);
+        } else {
+          api.sendMessage("❌ Auto group name is not running", threadID);
+        }
+      }
+
+      else if (cmd === "/bkl") {
+        if (!messageReply) {
+          return api.sendMessage("❌ Reply kisi ke message pe karo", threadID);
+        }
+
+        const abuses = [
+          "bhen ka lauda",
+          "madarchod", 
+          "randi ka baccha",
+          "bhosadike",
+          "gandu",
+          "chutiya",
+          "harami",
+          "kamine"
+        ];
+
+        const randomAbuse = abuses[Math.floor(Math.random() * abuses.length)];
+        
+        try {
+          const userInfo = await api.getUserInfo(messageReply.senderID);
+          const userName = userInfo[messageReply.senderID].name;
+          
+          api.sendMessage(`@${userName} ${randomAbuse} 😂`, threadID, messageID, [{
+            tag: userName,
+            id: messageReply.senderID
+          }]);
+        } catch (e) {
+          api.sendMessage(`${randomAbuse} 😂`, threadID, messageReply.messageID);
+        }
+      }
+
+      // BAN SYSTEM
       else if (cmd === "/ban") {
         const targetUserId = messageReply ? messageReply.senderID : args[1];
         if (!targetUserId) {
@@ -201,7 +311,6 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         }
       }
 
-      // NEW COMMAND: /unban - Unban a user
       else if (cmd === "/unban") {
         const targetUserId = args[1];
         if (!targetUserId) {
@@ -218,7 +327,6 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         }
       }
 
-      // NEW COMMAND: /listbanned - Show banned users
       else if (cmd === "/listbanned") {
         if (bannedUIDs.length === 0) {
           api.sendMessage("📋 No banned users", threadID);
@@ -227,7 +335,6 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         }
       }
 
-      // NEW COMMAND: /promote - Make user admin
       else if (cmd === "/promote") {
         const targetUserId = messageReply ? messageReply.senderID : args[1];
         if (!targetUserId) {
@@ -242,7 +349,6 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         }
       }
 
-      // NEW COMMAND: /demote - Remove admin
       else if (cmd === "/demote") {
         const targetUserId = messageReply ? messageReply.senderID : args[1];
         if (!targetUserId) {
@@ -261,7 +367,6 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         }
       }
 
-      // NEW COMMAND: /kickall - Kick all members except owners
       else if (cmd === "/kickall") {
         try {
           const info = await api.getThreadInfo(threadID);
@@ -276,7 +381,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
                 await api.removeUserFromGroup(uid, threadID);
                 kickedCount++;
                 console.log(`✅ Kicked UID: ${uid}`);
-                await new Promise(res => setTimeout(res, 2000)); // 2 second delay
+                await new Promise(res => setTimeout(res, 2000));
               } catch (e) {
                 console.log(`⚠️ Failed to kick ${uid}:`, e.message);
               }
@@ -290,7 +395,6 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         }
       }
 
-      // NEW COMMAND: /unsend - Delete replied message
       else if (cmd === "/unsend") {
         if (!messageReply) {
           return api.sendMessage("❌ Reply to a message to unsend it", threadID);
@@ -304,8 +408,7 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         }
       }
 
-      // AUTO REPLY SYSTEM COMMANDS
-      // NEW COMMAND: /autoreply - Enable/disable auto replies
+      // AUTO REPLY SYSTEM
       else if (cmd === "/autoreply") {
         const action = args[1];
         if (action === "on") {
@@ -319,7 +422,6 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         }
       }
 
-      // NEW COMMAND: /setreply - Set auto reply for keyword
       else if (cmd === "/setreply") {
         const parts = input.split(" ");
         if (parts.length < 2) {
@@ -335,7 +437,6 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         api.sendMessage(`✅ Auto reply set:\nKeyword: "${keyword}"\nResponse: "${response}"`, threadID);
       }
 
-      // NEW COMMAND: /removereply - Remove auto reply
       else if (cmd === "/removereply") {
         const keyword = args[1];
         if (!keyword) {
@@ -351,7 +452,6 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         }
       }
 
-      // NEW COMMAND: /listreply - List all auto replies
       else if (cmd === "/listreply") {
         const replies = Object.keys(autoReplies);
         if (replies.length === 0) {
@@ -364,88 +464,11 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
           api.sendMessage(replyList, threadID);
         }
       }
-      // NEW COMMAND: /id - Get UID of replied message sender
-      else if (cmd === "/id") {
-        if (!messageReply) {
-          return api.sendMessage("❌ Please reply to someone's message to get their UID", threadID);
-        }
-        api.sendMessage(`🆔 User ID: ${messageReply.senderID}`, threadID);
-      }
-
-      // NEW COMMAND: /autogcname - Auto change group name every 30 seconds
-      else if (cmd === "/autogcname") {
-        if (!input) {
-          return api.sendMessage("❌ Please provide text for auto group name\nUsage: /autogcname your text here", threadID);
-        }
-
-        // Stop existing interval if running
-        if (autoGcNameInterval) {
-          clearInterval(autoGcNameInterval);
-        }
-
-        autoGcNameText = input;
-        autoGcNameThreadID = threadID;
-
-        api.sendMessage(`✅ Auto group name started: "${input}" will change every 30 seconds`, threadID);
-
-        autoGcNameInterval = setInterval(async () => {
-          try {
-            await api.setTitle(autoGcNameText, autoGcNameThreadID);
-          } catch (e) {
-            console.error("❌ Error in auto group name:", e.message);
-          }
-        }, 30000);
-      }
-
-      // Command to stop auto group name
-      else if (cmd === "/stopautogcname") {
-        if (autoGcNameInterval) {
-          clearInterval(autoGcNameInterval);
-          autoGcNameInterval = null;
-          autoGcNameText = null;
-          autoGcNameThreadID = null;
-          api.sendMessage("🛑 Auto group name stopped", threadID);
-        } else {
-          api.sendMessage("❌ Auto group name is not running", threadID);
-        }
-      }
-
-      // NEW COMMAND: /bkl - Reply to someone's message to abuse them
-      else if (cmd === "/bkl") {
-        if (!messageReply) {
-          return api.sendMessage("❌ Reply kisi ke message pe karo", threadID);
-        }
-
-        const abuses = [
-          "bhen ka lauda",
-          "madarchod",
-          "randi ka baccha", 
-          "bhosadike",
-          "gandu",
-          "chutiya",
-          "harami",
-          "kamine"
-        ];
-
-        const randomAbuse = abuses[Math.floor(Math.random() * abuses.length)];
-        
-        try {
-          const userInfo = await api.getUserInfo(messageReply.senderID);
-          const userName = userInfo[messageReply.senderID].name;
-          
-          api.sendMessage(`@${userName} ${randomAbuse} 😂`, threadID, messageID, [{
-            tag: userName,
-            id: messageReply.senderID
-          }]);
-        } catch (e) {
-          api.sendMessage(`${randomAbuse} 😂`, threadID, messageReply.messageID);
-        }
-      }
 
       else if (cmd === "/exit") {
         try {
           await api.removeUserFromGroup(api.getCurrentUserID(), threadID);
-        } catch {
+        } catch (e) {
           api.sendMessage("❌ Can't leave group.", threadID);
         }
       }
@@ -453,6 +476,8 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
       else if (cmd === "/rkb") {
         if (!fs.existsSync("np.txt")) return api.sendMessage("❌ np.txt file not found", threadID);
         const name = input.trim();
+        if (!name) return api.sendMessage("❌ Please provide a name", threadID);
+        
         const lines = fs.readFileSync("np.txt", "utf8").split("\n").filter(Boolean);
         stopRequested = false;
 
@@ -465,7 +490,11 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
             rkbInterval = null;
             return;
           }
-          api.sendMessage(`${name} ${lines[index]}`, threadID);
+          try {
+            api.sendMessage(`${name} ${lines[index]}`, threadID);
+          } catch (e) {
+            console.log("Error in RKB:", e.message);
+          }
           index++;
         }, 60000);
 
@@ -526,6 +555,8 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
       else if (cmd === "/help") {
         const helpText = `
 📌 Available Commands:
+
+🔧 Basic Commands:
 /allname <name> – Change all nicknames
 /groupname <name> – Change group name
 /lockgroupname <name> – Lock group name
@@ -534,15 +565,34 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
 /stopautogcname – Stop auto group name
 /uid – Show group ID
 /id – Reply to message to get user's UID
-/bkl – Reply to message to abuse user
 /exit – Leave group
+
+👮‍♂️ Moderation Commands:
+/ban [uid] – Ban user (reply to message or provide UID)
+/unban <uid> – Unban user
+/listbanned – Show banned users
+/promote [uid] – Make user admin
+/demote [uid] – Remove admin
+/kickall – Kick all members except owners
+/unsend – Reply to message to delete it
+
+🤖 Auto Reply System:
+/autoreply on/off – Enable/disable auto replies
+/setreply <keyword> <response> – Set auto reply
+/removereply <keyword> – Remove auto reply
+/listreply – List all auto replies
+
+😈 Fun Commands:
+/bkl – Reply to message to abuse user
 /rkb <name> – Start RKB spam
 /stop – Stop RKB command
+/sticker<seconds> – Start sticker spam
+/stopsticker – Stop sticker spam
+
+📨 Utility Commands:
 /forward – Reply to message to forward to all
 /target <uid> – Target user for auto abuse
 /cleartarget – Clear target
-/sticker<seconds> – Start sticker spam
-/stopsticker – Stop sticker spam
 /help – Show this help`;
         api.sendMessage(helpText.trim(), threadID);
       }
@@ -570,7 +620,11 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
             return;
           }
 
-          api.sendMessage({ sticker: stickerIDs[i] }, threadID);
+          try {
+            api.sendMessage({ sticker: stickerIDs[i] }, threadID);
+          } catch (e) {
+            console.log("Error sending sticker:", e.message);
+          }
           i++;
         }, delay * 1000);
       }
