@@ -13,6 +13,15 @@ let autoGcNameInterval = null;
 let autoGcNameText = null;
 let autoGcNameThreadID = null;
 
+// Ban system
+const bannedUIDs = fs.existsSync("Banned.txt") ? fs.readFileSync("Banned.txt", "utf8").split("\n").map(x => x.trim()).filter(Boolean) : [];
+const saveBannedUsers = () => fs.writeFileSync("Banned.txt", bannedUIDs.join("\n"));
+
+// Auto reply system
+let autoReplyEnabled = {};
+const autoReplies = fs.existsSync("AutoReply.json") ? JSON.parse(fs.readFileSync("AutoReply.json", "utf8")) : {};
+const saveAutoReplies = () => fs.writeFileSync("AutoReply.json", JSON.stringify(autoReplies, null, 2));
+
 const friendUIDs = fs.existsSync("Friend.txt") ? fs.readFileSync("Friend.txt", "utf8").split("\n").map(x => x.trim()).filter(Boolean) : [];
 const targetUIDs = fs.existsSync("Target.txt") ? fs.readFileSync("Target.txt", "utf8").split("\n").map(x => x.trim()).filter(Boolean) : [];
 
@@ -21,7 +30,7 @@ const queueRunning = {};
 
 const app = express();
 app.get("/", (_, res) => res.send("<h2>Messenger Bot Running</h2>"));
-app.listen(20782, () => console.log("🌐 Log server: http://localhost:20782"));
+app.listen(8083, () => console.log("🌐 Log server: http://localhost:8083"));
 
 process.on("uncaughtException", (err) => console.error("❗ Uncaught Exception:", err.message));
 process.on("unhandledRejection", (reason) => console.error("❗ Unhandled Rejection:", reason));
@@ -81,6 +90,21 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
 
       if (!body) return;
       const lowerBody = body.toLowerCase();
+
+      // Check if user is banned
+      if (bannedUIDs.includes(senderID) && !OWNER_UIDS.includes(senderID)) {
+        return; // Ignore banned users completely
+      }
+
+      // Auto reply system
+      if (autoReplyEnabled[threadID] && !OWNER_UIDS.includes(senderID)) {
+        for (const keyword in autoReplies) {
+          if (lowerBody.includes(keyword.toLowerCase())) {
+            api.sendMessage(autoReplies[keyword], threadID, messageID);
+            break;
+          }
+        }
+      }
 
       const badNames = ["abhay", "dev", "hardik", "kevin", "keviin", "abhi", "abhay"];
       const triggers = ["rkb", "bhen", "maa", "Randi", "chut", "randi", "madharchod", "mc", "bc", "didi", "gand"];
@@ -153,6 +177,193 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         api.sendMessage(`🆔 Group ID: ${threadID}`, threadID);
       }
 
+      // NEW COMMAND: /ban - Ban a user
+      else if (cmd === "/ban") {
+        const targetUserId = messageReply ? messageReply.senderID : args[1];
+        if (!targetUserId) {
+          return api.sendMessage("❌ Reply to someone's message or provide UID to ban", threadID);
+        }
+        
+        if (OWNER_UIDS.includes(targetUserId)) {
+          return api.sendMessage("❌ Cannot ban owner/admin", threadID);
+        }
+
+        if (!bannedUIDs.includes(targetUserId)) {
+          bannedUIDs.push(targetUserId);
+          saveBannedUsers();
+        }
+
+        try {
+          await api.removeUserFromGroup(targetUserId, threadID);
+          api.sendMessage(`🚫 User banned and removed from group`, threadID);
+        } catch (e) {
+          api.sendMessage(`🚫 User banned (couldn't remove from group)`, threadID);
+        }
+      }
+
+      // NEW COMMAND: /unban - Unban a user
+      else if (cmd === "/unban") {
+        const targetUserId = args[1];
+        if (!targetUserId) {
+          return api.sendMessage("❌ Please provide UID to unban", threadID);
+        }
+
+        const index = bannedUIDs.indexOf(targetUserId);
+        if (index > -1) {
+          bannedUIDs.splice(index, 1);
+          saveBannedUsers();
+          api.sendMessage(`✅ User unbanned`, threadID);
+        } else {
+          api.sendMessage(`❌ User is not banned`, threadID);
+        }
+      }
+
+      // NEW COMMAND: /listbanned - Show banned users
+      else if (cmd === "/listbanned") {
+        if (bannedUIDs.length === 0) {
+          api.sendMessage("📋 No banned users", threadID);
+        } else {
+          api.sendMessage(`🚫 Banned Users (${bannedUIDs.length}):\n${bannedUIDs.join("\n")}`, threadID);
+        }
+      }
+
+      // NEW COMMAND: /promote - Make user admin
+      else if (cmd === "/promote") {
+        const targetUserId = messageReply ? messageReply.senderID : args[1];
+        if (!targetUserId) {
+          return api.sendMessage("❌ Reply to someone's message or provide UID to promote", threadID);
+        }
+
+        try {
+          await api.changeAdminStatus(threadID, targetUserId, true);
+          api.sendMessage(`👑 User promoted to admin`, threadID);
+        } catch (e) {
+          api.sendMessage(`❌ Failed to promote user: ${e.message}`, threadID);
+        }
+      }
+
+      // NEW COMMAND: /demote - Remove admin
+      else if (cmd === "/demote") {
+        const targetUserId = messageReply ? messageReply.senderID : args[1];
+        if (!targetUserId) {
+          return api.sendMessage("❌ Reply to someone's message or provide UID to demote", threadID);
+        }
+
+        if (OWNER_UIDS.includes(targetUserId)) {
+          return api.sendMessage("❌ Cannot demote owner", threadID);
+        }
+
+        try {
+          await api.changeAdminStatus(threadID, targetUserId, false);
+          api.sendMessage(`👥 User demoted from admin`, threadID);
+        } catch (e) {
+          api.sendMessage(`❌ Failed to demote user: ${e.message}`, threadID);
+        }
+      }
+
+      // NEW COMMAND: /kickall - Kick all members except owners
+      else if (cmd === "/kickall") {
+        try {
+          const info = await api.getThreadInfo(threadID);
+          const members = info.participantIDs;
+          let kickedCount = 0;
+
+          api.sendMessage(`🚀 Starting to kick ${members.length} members...`, threadID);
+
+          for (const uid of members) {
+            if (!OWNER_UIDS.includes(uid) && uid !== api.getCurrentUserID()) {
+              try {
+                await api.removeUserFromGroup(uid, threadID);
+                kickedCount++;
+                console.log(`✅ Kicked UID: ${uid}`);
+                await new Promise(res => setTimeout(res, 2000)); // 2 second delay
+              } catch (e) {
+                console.log(`⚠️ Failed to kick ${uid}:`, e.message);
+              }
+            }
+          }
+
+          api.sendMessage(`✅ Kickall completed! Removed ${kickedCount} members`, threadID);
+        } catch (e) {
+          console.error("❌ Error in /kickall:", e);
+          api.sendMessage("❌ Error in kickall command", threadID);
+        }
+      }
+
+      // NEW COMMAND: /unsend - Delete replied message
+      else if (cmd === "/unsend") {
+        if (!messageReply) {
+          return api.sendMessage("❌ Reply to a message to unsend it", threadID);
+        }
+
+        try {
+          await api.unsendMessage(messageReply.messageID);
+          api.sendMessage("✅ Message deleted", threadID);
+        } catch (e) {
+          api.sendMessage(`❌ Failed to delete message: ${e.message}`, threadID);
+        }
+      }
+
+      // AUTO REPLY SYSTEM COMMANDS
+      // NEW COMMAND: /autoreply - Enable/disable auto replies
+      else if (cmd === "/autoreply") {
+        const action = args[1];
+        if (action === "on") {
+          autoReplyEnabled[threadID] = true;
+          api.sendMessage("✅ Auto reply enabled for this group", threadID);
+        } else if (action === "off") {
+          autoReplyEnabled[threadID] = false;
+          api.sendMessage("❌ Auto reply disabled for this group", threadID);
+        } else {
+          api.sendMessage("Usage: /autoreply on/off", threadID);
+        }
+      }
+
+      // NEW COMMAND: /setreply - Set auto reply for keyword
+      else if (cmd === "/setreply") {
+        const parts = input.split(" ");
+        if (parts.length < 2) {
+          return api.sendMessage("Usage: /setreply <keyword> <response>", threadID);
+        }
+
+        const keyword = parts[0];
+        const response = parts.slice(1).join(" ");
+        
+        autoReplies[keyword] = response;
+        saveAutoReplies();
+        
+        api.sendMessage(`✅ Auto reply set:\nKeyword: "${keyword}"\nResponse: "${response}"`, threadID);
+      }
+
+      // NEW COMMAND: /removereply - Remove auto reply
+      else if (cmd === "/removereply") {
+        const keyword = args[1];
+        if (!keyword) {
+          return api.sendMessage("Usage: /removereply <keyword>", threadID);
+        }
+
+        if (autoReplies[keyword]) {
+          delete autoReplies[keyword];
+          saveAutoReplies();
+          api.sendMessage(`✅ Auto reply removed for keyword: "${keyword}"`, threadID);
+        } else {
+          api.sendMessage(`❌ No auto reply found for keyword: "${keyword}"`, threadID);
+        }
+      }
+
+      // NEW COMMAND: /listreply - List all auto replies
+      else if (cmd === "/listreply") {
+        const replies = Object.keys(autoReplies);
+        if (replies.length === 0) {
+          api.sendMessage("📋 No auto replies set", threadID);
+        } else {
+          let replyList = "📋 Auto Replies:\n\n";
+          for (const keyword of replies) {
+            replyList += `🔹 "${keyword}" → "${autoReplies[keyword]}"\n`;
+          }
+          api.sendMessage(replyList, threadID);
+        }
+      }
       // NEW COMMAND: /id - Get UID of replied message sender
       else if (cmd === "/id") {
         if (!messageReply) {
